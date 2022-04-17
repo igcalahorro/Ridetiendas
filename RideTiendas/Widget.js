@@ -5,9 +5,12 @@ define(['dojo/_base/declare', 'jimu/BaseWidget',
 "esri/tasks/query",
 "esri/tasks/ServiceAreaTask", 
 "esri/tasks/ServiceAreaParameters", 
+"esri/tasks/RouteTask",
+"esri/tasks/RouteParameters",
 "esri/tasks/FeatureSet",
 "esri/layers/FeatureLayer",
 "esri/geometry/geometryEngine",
+"esri/geometry/Point",
 
 "esri/renderers/SimpleRenderer",
 "esri/symbols/SimpleMarkerSymbol", 
@@ -19,14 +22,16 @@ define(['dojo/_base/declare', 'jimu/BaseWidget',
 ],
   function(
     declare, BaseWidget, Graphic, Color, Query,
-    ServiceAreaTask, ServiceAreaParameters, FeatureSet, FeatureLayer, GeometryEngine,
+    ServiceAreaTask, ServiceAreaParameters, RouteTask, RouteParameters, FeatureSet, FeatureLayer, GeometryEngine, Point,
     SimpleRenderer, SimpleMarkerSymbol, SimpleLineSymbol, SimpleFillSymbol,
     lang, arrayUtils
     ) {
     return declare([BaseWidget], {
       baseClass: 'jimu-widget-customwidget',
       tiendaService: new ServiceAreaTask('https://formacion.esri.es/server/rest/services/RedPFM/NAServer/Service%20Area'),
+      routeService: new RouteTask('https://formacion.esri.es/server/rest/services/TFM2022/Redes_TFM3/NAServer/Ruta'),
       symbol: null,
+      routeSymbol: null,
       comercios: new Map(),
 
       postCreate: function() {
@@ -39,7 +44,13 @@ define(['dojo/_base/declare', 'jimu/BaseWidget',
         marker.setColor(new Color([56, 168, 0, 0.88]));
         marker.setPath("M16,3.5c-4.142,0-7.5,3.358-7.5,7.5c0,4.143,7.5,18.121,7.5,18.121S23.5,15.143,23.5,11C23.5,6.858,20.143,3.5,16,3.5z M16,14.584c-1.979,0-3.584-1.604-3.584-3.584S14.021,7.416,16,7.416S19.584,9.021,19.584,11S17.979,14.584,16,14.584z");
         marker.setStyle(SimpleMarkerSymbol.STYLE_PATH);
+
+        this.routeSymbol = new SimpleLineSymbol().setColor(new Color([0,0,255,0.5])).setWidth(5);
+        console.log(this.routeSymbol);
       },
+
+      routeMode: false,
+      fromPoint: null,
 
       onOpen: function(event1){
         console.log('onOpen');
@@ -50,43 +61,76 @@ define(['dojo/_base/declare', 'jimu/BaseWidget',
           var comercios = this.comercios;
           var comercioService = this.comercioService;
 
-          map.graphics.clear();
+          if (this.routeMode === true) {
+            var toPoint = event2.mapPoint;
+            var graphic = new Graphic(toPoint, symbol);
 
-          var point = event2.mapPoint;
-          var graphic = new Graphic(point, symbol);
-          
-          map.graphics.add(graphic);
+            routeParams = new RouteParameters();
+            routeParams.stops = new FeatureSet();
+            routeParams.barriers = new FeatureSet();
+            routeParams.outSpatialReference = {"wkid":102100};
 
-          params = new ServiceAreaParameters();
-          params.defaultBreaks = [parseFloat(comercios.get('time'))];
-          params.travelMode = parseInt(comercios.get('mode'));
-          params.outSpatialReference = map.spatialReference;
-          params.returnFacilities = false;
-          
-          var facilities = new FeatureSet();
-          facilities.features = [graphic];
-          params.facilities = facilities;
+            routeParams.stops.features.push(this.fromPoint);
+            routeParams.stops.features.push(graphic);
 
-          comercioService = this.comercioService;
+            routeSymbol = this.routeSymbol;
 
-          this.tiendaService.solve(params, function(solveResult){
-            var polygonSymbol = new SimpleFillSymbol(
-              "solid",
-              new SimpleLineSymbol("solid", new Color([232,104,80]), 2),
-              new Color([232,104,80,0.25])
-            );
+            this.routeService.solve(routeParams, function(solveResult){
+              console.log(solveResult);
+              arrayUtils.forEach(solveResult.routeResults, function(routeResult, i) {
 
-            arrayUtils.forEach(solveResult.serviceAreaPolygons, function(serviceArea){
-              serviceArea.setSymbol(polygonSymbol);
-              map.graphics.add(serviceArea);
+                  map.graphics.add(
+                    routeResult.route.setSymbol(this.routeSymbol)
+                  );
+              });
             });
-  
-          }, function(err){
-            console.log(err.message);
-          });
+
+            this.routeMode = false;
+          } else {
+            map.graphics.clear();
+
+            var fromPoint = event2.mapPoint;
+            var graphic = new Graphic(fromPoint, symbol);
+            this.fromPoint = graphic;
+
+            map.graphics.add(graphic);
+
+            params = new ServiceAreaParameters();
+
+            var time = parseFloat(comercios.get('time'));
+            var travelMode = parseInt(comercios.get('mode'))
+            if (travelMode == 2) {
+              time *= 90;
+            }
+            params.defaultBreaks = [time];
+            params.travelMode = travelMode;
+            params.outSpatialReference = map.spatialReference;
+            params.returnFacilities = false;
+            
+            var facilities = new FeatureSet();
+            facilities.features = [graphic];
+            params.facilities = facilities;
+
+            comercioService = this.comercioService;
+
+            this.tiendaService.solve(params, function(solveResult){
+              var polygonSymbol = new SimpleFillSymbol(
+                "solid",
+                new SimpleLineSymbol("solid", new Color([232,104,80]), 2),
+                new Color([232,104,80,0.25])
+              );
+
+              arrayUtils.forEach(solveResult.serviceAreaPolygons, function(serviceArea){
+                serviceArea.setSymbol(polygonSymbol);
+                map.graphics.add(serviceArea);
+              });
+    
+            }, function(err){
+              console.log(err.message);
+            });
+          }
         }));
       },
-
 
       paramsHandler: function(evt){
         // Check what comercios are checked
@@ -101,6 +145,14 @@ define(['dojo/_base/declare', 'jimu/BaseWidget',
         });
         
         this.comercios = comercios;
+      },
+
+      routeHandler: function(evt){
+        if (this.fromPoint === null){
+          alert('You have to select a point on the map first!');
+        } else {
+          this.routeMode = true;
+        }
       }
     });
   });
